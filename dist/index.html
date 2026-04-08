@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Marky</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="toolbar">
+        <button id="open-file-button" type="button">Open File</button>
+        <button id="toggle-view-button" type="button" disabled>Show Source</button>
+      </header>
+
+      <main class="workspace">
+        <section id="empty-state" class="empty-state">
+          <p class="eyebrow">Marky</p>
+          <h1>Open markdown in peace.</h1>
+          <p>A tiny Windows-first viewer for local markdown files.</p>
+        </section>
+
+        <section id="document-shell" class="document-shell" hidden>
+          <article id="rendered-view" class="viewer markdown-view"></article>
+          <pre id="source-view" class="viewer source-view" hidden></pre>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./viewer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+[package]
+name = "barebones-markdown-viewer"
+version = "0.1.0"
+description = "A tiny Windows-first markdown viewer."
+authors = ["mrsam"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+default-run = "barebones-markdown-viewer"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "barebones_markdown_viewer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.10.3", features = [] }

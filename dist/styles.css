@@ -1,0 +1,265 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-hover: #1f2630;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --inline-code-bg: rgba(110, 118, 129, 0.18);
+  --code-bg: #11161d;
+  --ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono-font: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui-font);
+}
+
+button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.55rem 0.9rem;
+}
+
+button:hover {
+  background: var(--surface-hover);
+}
+
+button:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.8;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.toolbar {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 1rem 1rem 0;
+}
+
+.workspace {
+  flex: 1 1 auto;
+  padding: 1rem;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.empty-state {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: 100%;
+  justify-content: center;
+  margin: 0 auto;
+  max-width: 42rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.empty-state h1 {
+  font-size: clamp(2.4rem, 4vw, 3.2rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.empty-state p:last-child {
+  color: var(--muted);
+  margin: 0;
+}
+
+.document-shell {
+  height: 100%;
+}
+
+.viewer {
+  display: block;
+  height: calc(100vh - 88px);
+  margin: 0 auto;
+  max-width: 960px;
+  overflow: auto;
+  padding: 2rem 2rem 5rem;
+  width: 100%;
+}
+
+.markdown-view {
+  font-size: 16px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.markdown-view > :first-child,
+.source-view {
+  margin-top: 0;
+}
+
+.markdown-view h1,
+.markdown-view h2,
+.markdown-view h3,
+.markdown-view h4,
+.markdown-view h5,
+.markdown-view h6 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin-bottom: 16px;
+  margin-top: 24px;
+}
+
+.markdown-view h1 {
+  font-size: 2em;
+}
+
+.markdown-view h2 {
+  font-size: 1.5em;
+}
+
+.markdown-view h3 {
+  font-size: 1.25em;
+}
+
+.markdown-view h4 {
+  font-size: 1em;
+}
+
+.markdown-view h5 {
+  font-size: 0.875em;
+}
+
+.markdown-view h6 {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.markdown-view p,
+.markdown-view ul,
+.markdown-view ol,
+.markdown-view blockquote,
+.markdown-view pre {
+  margin-bottom: 16px;
+  margin-top: 0;
+}
+
+.markdown-view ul,
+.markdown-view ol {
+  padding-left: 2em;
+}
+
+.markdown-view li + li {
+  margin-top: 0.25em;
+}
+
+.markdown-view a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.markdown-view a:hover {
+  text-decoration: underline;
+}
+
+.markdown-view hr {
+  background: var(--border);
+  border: 0;
+  height: 1px;
+  margin: 24px 0;
+}
+
+.markdown-view blockquote {
+  border-left: 0.25em solid var(--border);
+  color: var(--muted);
+  margin-left: 0;
+  padding: 0 1em;
+}
+
+.markdown-view code,
+.source-view {
+  font-family: var(--mono-font);
+}
+
+.markdown-view code {
+  background: var(--inline-code-bg);
+  border-radius: 6px;
+  font-size: 85%;
+  padding: 0.2em 0.4em;
+}
+
+.markdown-view pre {
+  background: var(--code-bg);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: 85%;
+  line-height: 1.45;
+  overflow: auto;
+  padding: 16px;
+}
+
+.markdown-view pre code {
+  background: transparent;
+  color: inherit;
+  display: block;
+  padding: 0;
+  white-space: pre;
+}
+
+.source-view {
+  background: var(--code-bg);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+@media (max-width: 900px) {
+  .viewer {
+    padding: 2rem 1.25rem 6rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .toolbar {
+    flex-direction: column;
+  }
+
+  .empty-state {
+    padding: 1.5rem;
+  }
+}
