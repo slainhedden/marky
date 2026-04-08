@@ -9,22 +9,26 @@
   <body>
     <div class="shell">
       <header class="toolbar">
-        <button id="open-file-button" type="button">Open File</button>
-        <button id="toggle-view-button" type="button" disabled>Show Source</button>
+        <button id="toolbar-open-file-button" type="button">Open File</button>
+        <button id="toggle-view-button" class="toggle-view-button" type="button" hidden>
+          Show Source
+        </button>
       </header>
 
       <main class="workspace">
         <section id="empty-state" class="empty-state">
-          <p class="eyebrow">Marky</p>
+          <p class="empty-state__eyebrow">Marky</p>
           <h1>Open markdown in peace.</h1>
-          <p>A tiny Windows-first viewer for local markdown files.</p>
+          <button id="empty-open-file-button" type="button">Open File</button>
         </section>
 
         <section id="document-shell" class="document-shell" hidden>
-          <article id="rendered-view" class="viewer markdown-view"></article>
+          <article id="rendered-view" class="viewer markdown-view" hidden></article>
           <pre id="source-view" class="viewer source-view" hidden></pre>
         </section>
       </main>
+
+      <aside id="error-banner" class="error-banner" hidden></aside>
     </div>
 
     <script type="module" src="./viewer.js"></script>
