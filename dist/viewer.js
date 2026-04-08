@@ -2,15 +2,20 @@ const MARKDOWN_EXTENSIONS = ["md", "markdown", "mdown", "mkd"];
 
 function createState() {
   return {
+    allowWindowClose: false,
     document: null,
+    draftSource: "",
     files: [],
     folderPath: null,
+    isDirty: false,
+    isSaving: false,
     viewMode: "rendered"
   };
 }
 
 function getBrowserElements(documentObject) {
   return {
+    dirtyIndicator: documentObject.querySelector("#dirty-indicator"),
     documentShell: documentObject.querySelector("#document-shell"),
     emptyOpenFileButton: documentObject.querySelector("#empty-open-file-button"),
     emptyOpenFolderButton: documentObject.querySelector("#empty-open-folder-button"),
@@ -18,6 +23,7 @@ function getBrowserElements(documentObject) {
     errorBanner: documentObject.querySelector("#error-banner"),
     fileTree: documentObject.querySelector("#file-tree"),
     renderedView: documentObject.querySelector("#rendered-view"),
+    saveButton: documentObject.querySelector("#save-button"),
     sidebar: documentObject.querySelector("#sidebar"),
     sourceView: documentObject.querySelector("#source-view"),
     toggleViewButton: documentObject.querySelector("#toggle-view-button"),
@@ -71,7 +77,14 @@ export function createApp({
   appWindow,
   documentObject,
   windowObject,
-  openDialog = async (options) => await invoke("plugin:dialog|open", { options })
+  openDialog = async (options) => await invoke("plugin:dialog|open", { options }),
+  showMessage = async (message, options) =>
+    await invoke("plugin:dialog|message", {
+      buttons: normalizeDialogButtons(options?.buttons),
+      kind: options?.kind,
+      message,
+      title: options?.title
+    })
 }) {
   const state = createState();
 
@@ -99,6 +112,14 @@ export function createApp({
       });
     }
 
+    elements.saveButton.addEventListener("click", () => {
+      void runAction(saveDocument);
+    });
+
+    elements.sourceView.addEventListener("input", () => {
+      updateDraftSource(elements.sourceView.value);
+    });
+
     elements.toggleViewButton.addEventListener("click", toggleViewMode);
     elements.renderedView.addEventListener("click", (event) => {
       void runAction(async () => {
@@ -116,6 +137,12 @@ export function createApp({
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         void runAction(openFolder);
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void runAction(saveDocument);
         return;
       }
 
@@ -140,6 +167,10 @@ export function createApp({
       return;
     }
 
+    if (!(await confirmBeforeNavigation("Save changes before opening a different file?"))) {
+      return;
+    }
+
     clearFolderState();
     await openSingleFile(selectedPath);
   }
@@ -157,6 +188,10 @@ export function createApp({
       return;
     }
 
+    if (!(await confirmBeforeNavigation("Save changes before opening a folder?"))) {
+      return;
+    }
+
     const folderPayload = await invoke("open_markdown_folder", {
       folderPath: selectedPath
     });
@@ -167,6 +202,10 @@ export function createApp({
   async function bindWindowEvents() {
     await listen("viewer://document-opened", ({ payload }) => {
       void runAction(async () => {
+        if (!(await confirmBeforeNavigation("Save changes before opening a different file?"))) {
+          return;
+        }
+
         clearFolderState();
         showDocument(payload);
       });
@@ -187,6 +226,10 @@ export function createApp({
               return;
             }
 
+            if (!(await confirmBeforeNavigation("Save changes before opening a different file?"))) {
+              return;
+            }
+
             clearFolderState();
             await openSingleFile(firstPath);
           });
@@ -195,6 +238,27 @@ export function createApp({
       }
 
       documentObject.body.classList.remove("is-dragging");
+    });
+
+    await appWindow.onCloseRequested(async (event) => {
+      if (state.allowWindowClose || !state.isDirty) {
+        return;
+      }
+
+      event.preventDefault();
+
+      try {
+        if (!(await confirmBeforeNavigation("Save changes before closing the window?"))) {
+          return;
+        }
+
+        state.allowWindowClose = true;
+        await appWindow.close();
+      } catch (error) {
+        showError(error);
+      } finally {
+        state.allowWindowClose = false;
+      }
     });
   }
 
@@ -211,6 +275,33 @@ export function createApp({
     await openSingleFile(path);
   }
 
+  async function saveDocument() {
+    if (!state.document || !state.isDirty || state.isSaving) {
+      return false;
+    }
+
+    state.isSaving = true;
+    applyShellState();
+
+    try {
+      const savedDocument = await invoke("save_markdown_path", {
+        path: state.document.path,
+        source: state.draftSource
+      });
+
+      showDocument(savedDocument, {
+        preserveViewMode: true,
+        resetScroll: false
+      });
+
+      return true;
+    } catch (error) {
+      state.isSaving = false;
+      applyShellState();
+      throw error;
+    }
+  }
+
   async function handleLinkClick(event) {
     const link = event.target.closest("a[href]");
     if (!link) {
@@ -223,6 +314,12 @@ export function createApp({
     }
 
     event.preventDefault();
+
+    if (!isExternalHref(href)) {
+      if (!(await confirmBeforeNavigation("Save changes before following a different markdown link?"))) {
+        return;
+      }
+    }
 
     const nextDocument = await invoke("follow_link", {
       currentPath: state.document?.path ?? null,
@@ -238,8 +335,34 @@ export function createApp({
       return;
     }
 
-    clearFolderState();
+    if (state.folderPath) {
+      clearFolderState();
+    }
+
     showDocument(nextDocument);
+  }
+
+  async function confirmBeforeNavigation(actionDescription) {
+    if (!state.document || !state.isDirty) {
+      return true;
+    }
+
+    const fileName = state.document.fileName ?? "This file";
+    const result = await showMessage(
+      `${fileName} has unsaved changes.\n\n${actionDescription}`,
+      {
+        buttons: { yes: "Save", no: "Discard", cancel: "Cancel" },
+        kind: "warning",
+        title: "Unsaved Changes"
+      }
+    );
+
+    if (result === "Save") {
+      await saveDocument();
+      return true;
+    }
+
+    return result === "Discard";
   }
 
   function showFolder(folderPayload) {
@@ -248,18 +371,34 @@ export function createApp({
     showDocument(folderPayload.document);
   }
 
-  function showDocument(documentPayload) {
+  function showDocument(documentPayload, options = {}) {
+    const { preserveViewMode = false, resetScroll = true } = options;
+
     state.document = documentPayload;
-    state.viewMode = "rendered";
+    state.draftSource = documentPayload.source;
+    state.isDirty = false;
+    state.isSaving = false;
+
+    if (!preserveViewMode) {
+      state.viewMode = "rendered";
+    }
 
     elements.renderedView.innerHTML = documentPayload.html;
-    elements.sourceView.textContent = documentPayload.source;
-    elements.renderedView.scrollTop = 0;
-    elements.sourceView.scrollTop = 0;
+    elements.sourceView.value = documentPayload.source;
+
+    if (resetScroll) {
+      resetViewerScroll();
+    }
 
     renderFileTree();
     applyShellState();
     clearError();
+  }
+
+  function updateDraftSource(nextSource) {
+    state.draftSource = nextSource;
+    state.isDirty = Boolean(state.document) && nextSource !== state.document.source;
+    applyShellState();
   }
 
   function clearFolderState() {
@@ -268,13 +407,24 @@ export function createApp({
     elements.fileTree.innerHTML = "";
   }
 
-  function toggleViewMode() {
-    if (!state.document) {
-      return;
-    }
+  function applyShellState() {
+    const hasDocument = Boolean(state.document);
+    const hasFolder = Boolean(state.folderPath);
+    const showingSource = state.viewMode === "source";
 
-    state.viewMode = state.viewMode === "source" ? "rendered" : "source";
-    applyShellState();
+    elements.emptyState.hidden = hasDocument;
+    elements.documentShell.hidden = !hasDocument;
+    elements.sidebar.hidden = !hasDocument || !hasFolder;
+    elements.renderedView.hidden = !hasDocument || showingSource;
+    elements.sourceView.hidden = !hasDocument || !showingSource;
+    elements.toggleViewButton.hidden = !hasDocument;
+    elements.toggleViewButton.disabled = !hasDocument;
+    elements.toggleViewButton.textContent = showingSource ? "Show Rendered" : "Show Source";
+
+    elements.saveButton.disabled = !hasDocument || !state.isDirty || state.isSaving;
+    elements.saveButton.textContent = state.isSaving ? "Saving..." : "Save";
+
+    elements.dirtyIndicator.hidden = !hasDocument || !state.isDirty;
   }
 
   function renderFileTree() {
@@ -306,25 +456,19 @@ export function createApp({
         }
 
         void runAction(async () => {
+          if (!(await confirmBeforeNavigation("Save changes before opening a different file?"))) {
+            return;
+          }
+
           await openPath(path);
         });
       });
     }
   }
 
-  function applyShellState() {
-    const hasDocument = Boolean(state.document);
-    const hasFolder = Boolean(state.folderPath);
-    const showingSource = state.viewMode === "source";
-
-    elements.emptyState.hidden = hasDocument;
-    elements.documentShell.hidden = !hasDocument;
-    elements.sidebar.hidden = !hasDocument || !hasFolder;
-    elements.renderedView.hidden = !hasDocument || showingSource;
-    elements.sourceView.hidden = !hasDocument || !showingSource;
-    elements.toggleViewButton.hidden = !hasDocument;
-    elements.toggleViewButton.disabled = !hasDocument;
-    elements.toggleViewButton.textContent = showingSource ? "Show Rendered" : "Show Source";
+  function resetViewerScroll() {
+    elements.renderedView.scrollTop = 0;
+    elements.sourceView.scrollTop = 0;
   }
 
   function isCurrentPath(path) {
@@ -357,6 +501,7 @@ export function createApp({
     openFile,
     openFolder,
     openPath,
+    saveDocument,
     showDocument,
     showError,
     showFolder
@@ -390,6 +535,34 @@ function escapeHtml(value) {
 
 function escapeHtmlAttribute(value) {
   return escapeHtml(value).replaceAll("'", "&#39;");
+}
+
+function normalizeDialogButtons(buttons) {
+  if (!buttons || typeof buttons === "string") {
+    return buttons;
+  }
+
+  if ("ok" in buttons && "cancel" in buttons) {
+    return { OkCancelCustom: [buttons.ok, buttons.cancel] };
+  }
+
+  if ("yes" in buttons && "no" in buttons && "cancel" in buttons) {
+    return { YesNoCancelCustom: [buttons.yes, buttons.no, buttons.cancel] };
+  }
+
+  if ("ok" in buttons) {
+    return { OkCustom: buttons.ok };
+  }
+
+  return undefined;
+}
+
+function isExternalHref(href) {
+  return matchesProtocol(href, "http", "https", "mailto", "tel");
+}
+
+function matchesProtocol(href, ...protocols) {
+  return protocols.includes(href.split(":").shift());
 }
 
 function isPathInFolder(path, folderPath) {

@@ -12,6 +12,8 @@
         <div class="toolbar__group">
           <button id="toolbar-open-file-button" type="button">Open File</button>
           <button id="toolbar-open-folder-button" type="button">Open Folder</button>
+          <button id="save-button" type="button">Save</button>
+          <span id="dirty-indicator" class="dirty-indicator" hidden>Unsaved changes</span>
         </div>
 
         <div class="toolbar__group toolbar__group--right">
@@ -38,7 +40,12 @@
 
           <section class="content-pane">
             <article id="rendered-view" class="viewer markdown-view" hidden></article>
-            <pre id="source-view" class="viewer source-view" hidden></pre>
+            <textarea
+              id="source-view"
+              class="viewer source-view"
+              hidden
+              spellcheck="false"
+            ></textarea>
           </section>
         </section>
       </main>

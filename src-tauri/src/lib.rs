@@ -57,6 +57,14 @@ async fn open_markdown_folder(folder_path: String) -> Result<FolderPayload, Stri
 }
 
 #[tauri::command]
+async fn save_markdown_path(path: String, source: String) -> Result<DocumentPayload, String> {
+    let path = PathBuf::from(path);
+    tauri::async_runtime::spawn_blocking(move || save_document(path, source))
+        .await
+        .map_err(error_message)?
+}
+
+#[tauri::command]
 fn follow_link(
     current_path: Option<String>,
     href: String,
@@ -97,7 +105,8 @@ pub fn run() {
             follow_link,
             get_launch_document,
             open_markdown_folder,
-            open_markdown_path
+            open_markdown_path,
+            save_markdown_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -165,6 +174,12 @@ fn load_document(path: &Path) -> Result<DocumentPayload, String> {
     let bytes = fs::read(&absolute_path).map_err(error_message)?;
     let source = String::from_utf8_lossy(&bytes).into_owned();
 
+    Ok(build_document_payload(absolute_path, source))
+}
+
+fn save_document(path: PathBuf, source: String) -> Result<DocumentPayload, String> {
+    let absolute_path = path.canonicalize().map_err(error_message)?;
+    fs::write(&absolute_path, source.as_bytes()).map_err(error_message)?;
     Ok(build_document_payload(absolute_path, source))
 }
 
