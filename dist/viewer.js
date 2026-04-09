@@ -8,7 +8,6 @@ const THEME_STORAGE_KEY = "barebones-markdown-viewer-theme";
 
 function createState() {
   return {
-    allowWindowClose: false,
     document: null,
     draftSource: "",
     files: [],
@@ -252,33 +251,17 @@ export function createApp({
     });
 
     await appWindow.onCloseRequested(async (event) => {
-      if (state.allowWindowClose) {
-        state.allowWindowClose = false;
-        return;
-      }
-
       if (!state.isDirty) {
         return;
       }
 
-      event.preventDefault();
-
       try {
         if (!(await confirmBeforeNavigation("Save changes before closing the window?"))) {
+          event.preventDefault();
           return;
         }
-
-        state.allowWindowClose = true;
-        windowObject.setTimeout(async () => {
-          try {
-            await appWindow.close();
-          } catch (error) {
-            state.allowWindowClose = false;
-            showError(error);
-          }
-        }, 0);
       } catch (error) {
-        state.allowWindowClose = false;
+        event.preventDefault();
         showError(error);
       }
     });

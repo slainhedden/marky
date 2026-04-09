@@ -90,12 +90,8 @@ function createWindowObject() {
 
 function createAppWindow() {
   return {
-    closeCalls: 0,
     closeHandler: null,
     dragDropHandler: null,
-    async close() {
-      this.closeCalls += 1;
-    },
     async destroy() {},
     async onCloseRequested(handler) {
       this.closeHandler = handler;
@@ -391,7 +387,49 @@ test("boot loads the saved theme and cycleTheme persists the next one", async ()
   assert.equal(storage.getItem("barebones-markdown-viewer-theme"), "forest");
 });
 
-test("close requests with unsaved changes schedule a second close", async () => {
+test("close requests with unsaved changes are prevented when canceled", async () => {
+  const elements = createElements();
+  const appWindow = createAppWindow();
+  const app = createApp({
+    appWindow,
+    documentObject: createDocumentObject(),
+    elements,
+    listen: async () => {},
+    showMessage: async () => "Cancel",
+    storage: createStorage(),
+    windowObject: createWindowObject(),
+    invoke: async (command) => {
+      if (command === "get_launch_document") {
+        return null;
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  await app.boot();
+  app.showDocument({
+    fileName: "example.md",
+    html: "<h1>Example</h1>",
+    path: "C:/notes/example.md",
+    source: "# Example"
+  });
+
+  elements.toggleViewButton.click();
+  elements.sourceView.value = "# Changed";
+  elements.sourceView.listeners.input?.({ target: elements.sourceView });
+
+  let prevented = false;
+  await appWindow.closeHandler?.({
+    preventDefault() {
+      prevented = true;
+    }
+  });
+
+  assert.equal(prevented, true);
+});
+
+test("close requests with unsaved changes are not prevented when discarded", async () => {
   const elements = createElements();
   const appWindow = createAppWindow();
   const app = createApp({
@@ -430,15 +468,5 @@ test("close requests with unsaved changes schedule a second close", async () => 
     }
   });
 
-  assert.equal(prevented, true);
-  assert.equal(appWindow.closeCalls, 1);
-  assert.equal(app.state.allowWindowClose, true);
-
-  await appWindow.closeHandler?.({
-    preventDefault() {
-      throw new Error("second close should not be prevented");
-    }
-  });
-
-  assert.equal(app.state.allowWindowClose, false);
+  assert.equal(prevented, false);
 });
