@@ -1,4 +1,10 @@
 const MARKDOWN_EXTENSIONS = ["md", "markdown", "mdown", "mkd"];
+const THEMES = [
+  { id: "midnight", label: "Midnight" },
+  { id: "paper", label: "Paper" },
+  { id: "forest", label: "Forest" }
+];
+const THEME_STORAGE_KEY = "barebones-markdown-viewer-theme";
 
 function createState() {
   return {
@@ -9,6 +15,7 @@ function createState() {
     folderPath: null,
     isDirty: false,
     isSaving: false,
+    themeId: THEMES[0].id,
     viewMode: "rendered"
   };
 }
@@ -26,6 +33,7 @@ function getBrowserElements(documentObject) {
     saveButton: documentObject.querySelector("#save-button"),
     sidebar: documentObject.querySelector("#sidebar"),
     sourceView: documentObject.querySelector("#source-view"),
+    themeButton: documentObject.querySelector("#theme-button"),
     toggleViewButton: documentObject.querySelector("#toggle-view-button"),
     toolbarOpenFileButton: documentObject.querySelector("#toolbar-open-file-button"),
     toolbarOpenFolderButton: documentObject.querySelector("#toolbar-open-folder-button")
@@ -77,6 +85,7 @@ export function createApp({
   appWindow,
   documentObject,
   windowObject,
+  storage,
   openDialog = async (options) => await invoke("plugin:dialog|open", { options }),
   showMessage = async (message, options) =>
     await invoke("plugin:dialog|message", {
@@ -89,6 +98,7 @@ export function createApp({
   const state = createState();
 
   async function boot() {
+    loadTheme();
     bindUi();
     applyShellState();
     await bindWindowEvents();
@@ -120,6 +130,7 @@ export function createApp({
       updateDraftSource(elements.sourceView.value);
     });
 
+    elements.themeButton.addEventListener("click", cycleTheme);
     elements.toggleViewButton.addEventListener("click", toggleViewMode);
     elements.renderedView.addEventListener("click", (event) => {
       void runAction(async () => {
@@ -383,6 +394,9 @@ export function createApp({
       state.viewMode = "rendered";
     }
 
+    elements.emptyState.hidden = true;
+    elements.documentShell.hidden = false;
+
     elements.renderedView.innerHTML = documentPayload.html;
     elements.sourceView.value = documentPayload.source;
 
@@ -425,6 +439,39 @@ export function createApp({
     elements.saveButton.textContent = state.isSaving ? "Saving..." : "Save";
 
     elements.dirtyIndicator.hidden = !hasDocument || !state.isDirty;
+  }
+
+  function loadTheme() {
+    const themeId = storage?.getItem(THEME_STORAGE_KEY);
+    applyTheme(themeId);
+  }
+
+  function applyTheme(themeId) {
+    const theme = getTheme(themeId);
+    state.themeId = theme.id;
+    documentObject.documentElement.dataset.theme = theme.id;
+    elements.themeButton.textContent = `Theme: ${theme.label}`;
+    storage?.setItem(THEME_STORAGE_KEY, theme.id);
+  }
+
+  function cycleTheme() {
+    const currentThemeIndex = THEMES.findIndex((theme) => theme.id === state.themeId);
+    const nextTheme = THEMES[(currentThemeIndex + 1) % THEMES.length];
+    applyTheme(nextTheme.id);
+  }
+
+  function toggleViewMode() {
+    if (!state.document) {
+      return;
+    }
+
+    state.viewMode = state.viewMode === "source" ? "rendered" : "source";
+    resetViewerScroll();
+    applyShellState();
+
+    if (state.viewMode === "source") {
+      elements.sourceView.focus();
+    }
   }
 
   function renderFileTree() {
@@ -497,10 +544,13 @@ export function createApp({
 
   return {
     state,
+    applyShellState,
     boot,
+    clearFolderState,
     openFile,
     openFolder,
     openPath,
+    runAction,
     saveDocument,
     showDocument,
     showError,
@@ -516,7 +566,8 @@ export function createBrowserApp() {
     listen: tauri.event.listen,
     appWindow: tauri.window.getCurrentWindow(),
     documentObject: document,
-    windowObject: window
+    windowObject: window,
+    storage: window.localStorage
   });
 }
 
@@ -535,6 +586,10 @@ function escapeHtml(value) {
 
 function escapeHtmlAttribute(value) {
   return escapeHtml(value).replaceAll("'", "&#39;");
+}
+
+function getTheme(themeId) {
+  return THEMES.find((theme) => theme.id === themeId) ?? THEMES[0];
 }
 
 function normalizeDialogButtons(buttons) {

@@ -1,22 +1,32 @@
-use pulldown_cmark::{html, Options, Parser};
+use ammonia::Builder as HtmlSanitizer;
+use pulldown_cmark::{html, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use serde::Serialize;
 use std::{
+    borrow::Cow,
     cmp::Ordering,
     env,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
+};
+use syntect::{
+    html::{ClassStyle, ClassedHTMLGenerator},
+    parsing::{SyntaxReference, SyntaxSet},
+    util::LinesWithEndings,
 };
 use tauri::{Emitter, Manager};
 
 const OPEN_DOCUMENT_EVENT: &str = "viewer://document-opened";
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
+const CODE_CLASS_PREFIXES: &[&str] = &["syn-", "language-", "code-block", "diff-line"];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentPayload {
     file_name: String,
-    path: String,
+    path: Option<String>,
+    directory: Option<String>,
     html: String,
     source: String,
 }
@@ -35,6 +45,15 @@ struct FolderPayload {
     document: DocumentPayload,
     folder_path: String,
     files: Vec<FolderFileEntry>,
+}
+
+enum NormalizedFenceLanguage {
+    PlainText,
+    Diff,
+    Syntax {
+        syntax_token: String,
+        class_token: String,
+    },
 }
 
 #[tauri::command]
@@ -189,7 +208,8 @@ fn build_document_payload(path: PathBuf, source: String) -> DocumentPayload {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned()),
-        path: path.to_string_lossy().into_owned(),
+        path: Some(path.to_string_lossy().into_owned()),
+        directory: path.parent().map(|parent| parent.to_string_lossy().into_owned()),
         html: render_markdown(&source),
         source,
     }
@@ -253,10 +273,231 @@ fn collect_markdown_paths_into(directory: &Path, paths: &mut Vec<PathBuf>) -> Re
 }
 
 fn render_markdown(source: &str) -> String {
+    sanitize_html(&render_markdown_html(source))
+}
+
+fn render_markdown_html(source: &str) -> String {
     let parser = Parser::new_ext(source, markdown_options());
+    let mut events = parser.into_iter();
+    let mut buffered_events = Vec::new();
     let mut html_output = String::new();
-    html::push_html(&mut html_output, parser);
-    ammonia::clean(&html_output)
+
+    while let Some(event) = events.next() {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
+                flush_markdown_events(&mut html_output, &mut buffered_events);
+
+                let mut code = String::new();
+                for code_event in events.by_ref() {
+                    match code_event {
+                        Event::End(TagEnd::CodeBlock) => break,
+                        Event::Text(text) | Event::Code(text) | Event::Html(text) => {
+                            code.push_str(text.as_ref());
+                        }
+                        Event::SoftBreak | Event::HardBreak => code.push('\n'),
+                        _ => {}
+                    }
+                }
+
+                html_output.push_str(&render_code_block(normalize_fence_language(info.as_ref()), &code));
+            }
+            _ => buffered_events.push(event),
+        }
+    }
+
+    flush_markdown_events(&mut html_output, &mut buffered_events);
+    html_output
+}
+
+fn render_code_block(language: NormalizedFenceLanguage, code: &str) -> String {
+    match language {
+        NormalizedFenceLanguage::PlainText => render_plain_code_block("plain", code),
+        NormalizedFenceLanguage::Diff => render_diff_block(code),
+        NormalizedFenceLanguage::Syntax {
+            syntax_token,
+            class_token,
+        } => render_syntax_highlighted_block(&syntax_token, &class_token, code),
+    }
+}
+
+fn render_syntax_highlighted_block(syntax_token: &str, class_token: &str, code: &str) -> String {
+    let Some(syntax) = find_syntax_by_token(syntax_token) else {
+        return render_plain_code_block("plain", code);
+    };
+
+    let syntax_set = get_syntax_set();
+    let mut html_generator = ClassedHTMLGenerator::new_with_class_style(
+        syntax,
+        syntax_set,
+        ClassStyle::SpacedPrefixed { prefix: "syn-" },
+    );
+
+    let owned_code = (!code.is_empty() && !code.ends_with('\n')).then(|| format!("{code}\n"));
+    let code_for_highlighting = if let Some(code_with_newline) = owned_code.as_deref() {
+        code_with_newline
+    } else {
+        code
+    };
+
+    for line in LinesWithEndings::from(code_for_highlighting) {
+        if html_generator
+            .parse_html_for_line_which_includes_newline(line)
+            .is_err()
+        {
+            return render_plain_code_block(class_token, code);
+        }
+    }
+
+    render_wrapped_code_block(
+        "code-block code-block--highlighted",
+        class_token,
+        &html_generator.finalize(),
+    )
+}
+
+fn render_plain_code_block(class_token: &str, code: &str) -> String {
+    render_wrapped_code_block("code-block", class_token, &escape_html(code))
+}
+
+fn render_diff_block(code: &str) -> String {
+    let mut inner_html = String::new();
+    for line in code.split_inclusive('\n') {
+        inner_html.push_str(&render_diff_line(line));
+    }
+
+    render_wrapped_code_block("code-block code-block--diff", "diff", &inner_html)
+}
+
+fn render_diff_line(line: &str) -> String {
+    let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+    let mut escaped_line = escape_html(line_without_newline);
+    if line.ends_with('\n') {
+        escaped_line.push('\n');
+    }
+
+    format!(
+        "<span class=\"diff-line {}\">{}</span>",
+        diff_line_class(line_without_newline),
+        escaped_line
+    )
+}
+
+fn diff_line_class(line: &str) -> &'static str {
+    if line.starts_with("+++") || line.starts_with("---") {
+        return "diff-line--file";
+    }
+    if line.starts_with("@@") {
+        return "diff-line--hunk";
+    }
+    if line.starts_with("diff ")
+        || line.starts_with("index ")
+        || line.starts_with("new file mode ")
+        || line.starts_with("deleted file mode ")
+        || line.starts_with("rename from ")
+        || line.starts_with("rename to ")
+        || line.starts_with("similarity index ")
+        || line.starts_with("Binary files ")
+        || line.starts_with("GIT binary patch")
+    {
+        return "diff-line--meta";
+    }
+    if line.starts_with('+') {
+        return "diff-line--add";
+    }
+    if line.starts_with('-') {
+        return "diff-line--remove";
+    }
+    "diff-line--context"
+}
+
+fn render_wrapped_code_block(pre_classes: &str, class_token: &str, inner_html: &str) -> String {
+    format!(
+        "<pre class=\"{pre_classes}\"><code class=\"language-{class_token}\">{inner_html}</code></pre>"
+    )
+}
+
+fn sanitize_html(html: &str) -> String {
+    let mut sanitizer = HtmlSanitizer::default();
+    sanitizer.add_tags(&["span"]);
+    sanitizer.add_generic_attributes(&["class"]);
+    sanitizer.attribute_filter(|tag, attribute, value| {
+        if attribute != "class" {
+            return Some(Cow::Borrowed(value));
+        }
+
+        if !matches!(tag, "pre" | "code" | "span") {
+            return None;
+        }
+
+        let filtered = value
+            .split_whitespace()
+            .filter(|class_name| is_allowed_code_class(class_name))
+            .collect::<Vec<_>>();
+
+        if filtered.is_empty() {
+            None
+        } else {
+            Some(Cow::Owned(filtered.join(" ")))
+        }
+    });
+
+    sanitizer.clean(html).to_string()
+}
+
+fn normalize_fence_language(info: &str) -> NormalizedFenceLanguage {
+    let info = info.trim();
+    if info.is_empty() {
+        return NormalizedFenceLanguage::PlainText;
+    }
+
+    let mut parts = info.split_whitespace();
+    let first_token = parts.next().unwrap();
+    if first_token.eq_ignore_ascii_case("git")
+        && matches!(parts.next(), Some(token) if token.eq_ignore_ascii_case("diff"))
+    {
+        return NormalizedFenceLanguage::Diff;
+    }
+
+    let lower_token = first_token.to_ascii_lowercase();
+    let token = lower_token
+        .strip_prefix("language-")
+        .unwrap_or(&lower_token)
+        .to_string();
+
+    match token.as_str() {
+        "diff" | "patch" => return NormalizedFenceLanguage::Diff,
+        "md" | "text" | "plaintext" | "none" => return NormalizedFenceLanguage::PlainText,
+        _ => {}
+    }
+
+    let syntax_token = match token.as_str() {
+        "js" => Some("javascript".to_string()),
+        "ts" => Some("typescript".to_string()),
+        "py" => Some("python".to_string()),
+        "sh" | "shell" | "zsh" => Some("bash".to_string()),
+        "ps1" | "ps" => Some("powershell".to_string()),
+        "yml" => Some("yaml".to_string()),
+        "rb" => Some("ruby".to_string()),
+        "rs" => Some("rust".to_string()),
+        _ => {
+            if find_syntax_by_token(first_token).is_some() {
+                Some(first_token.to_string())
+            } else if find_syntax_by_token(&token).is_some() {
+                Some(token)
+            } else {
+                None
+            }
+        }
+    };
+
+    let Some(syntax_token) = syntax_token else {
+        return NormalizedFenceLanguage::PlainText;
+    };
+
+    NormalizedFenceLanguage::Syntax {
+        class_token: sanitize_language_class_token(&syntax_token),
+        syntax_token,
+    }
 }
 
 fn markdown_options() -> Options {
@@ -266,6 +507,70 @@ fn markdown_options() -> Options {
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_TASKLISTS);
     options
+}
+
+fn flush_markdown_events<'a>(html_output: &mut String, buffered_events: &mut Vec<Event<'a>>) {
+    if buffered_events.is_empty() {
+        return;
+    }
+
+    html::push_html(html_output, buffered_events.drain(..));
+}
+
+fn get_syntax_set() -> &'static SyntaxSet {
+    static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+fn find_syntax_by_token(token: &str) -> Option<&'static SyntaxReference> {
+    get_syntax_set().find_syntax_by_token(token)
+}
+
+fn sanitize_language_class_token(token: &str) -> String {
+    let mut class_token = String::new();
+    let mut previous_was_separator = false;
+
+    for ch in token.chars() {
+        let ch = ch.to_ascii_lowercase();
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            class_token.push(ch);
+            previous_was_separator = false;
+            continue;
+        }
+
+        if !previous_was_separator {
+            class_token.push('-');
+            previous_was_separator = true;
+        }
+    }
+
+    let trimmed = class_token.trim_matches('-');
+    if trimmed.is_empty() {
+        "plain".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn is_allowed_code_class(class_name: &str) -> bool {
+    CODE_CLASS_PREFIXES
+        .iter()
+        .any(|prefix| class_name.starts_with(prefix))
+}
+
+fn escape_html(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn is_external_href(href: &str) -> bool {
@@ -315,4 +620,112 @@ fn select_folder_document(files: &[PathBuf]) -> Option<PathBuf> {
 
 fn error_message(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_folder, render_markdown, save_document};
+    use std::{
+        env,
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn highlighted_fence_keeps_syntect_classes() {
+        let html = render_markdown("```python\nprint('hello')\n```");
+
+        assert!(html.contains("code-block--highlighted"));
+        assert!(html.contains("language-python"));
+        assert!(html.contains("syn-"));
+    }
+
+    #[test]
+    fn unknown_language_falls_back_to_plain_text() {
+        let html = render_markdown("```madeup\nhello\n```");
+
+        assert!(html.contains("<pre class=\"code-block\">"));
+        assert!(html.contains("language-plain"));
+        assert!(!html.contains("code-block--highlighted"));
+    }
+
+    #[test]
+    fn diff_fence_renders_added_and_removed_lines() {
+        let html = render_markdown("```diff\n-old\n+new\n@@ line @@\n```");
+
+        assert!(html.contains("diff-line--remove"));
+        assert!(html.contains("diff-line--add"));
+        assert!(html.contains("diff-line--hunk"));
+    }
+
+    #[test]
+    fn diff_renderer_escapes_html() {
+        let html = render_markdown("```diff\n+<script>alert(1)</script>\n```");
+
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<script>"));
+    }
+
+    #[test]
+    fn raw_html_still_has_unsafe_attributes_stripped() {
+        let html = render_markdown("<span onclick=\"alert(1)\">safe</span>");
+
+        assert!(html.contains("<span>safe</span>"));
+        assert!(!html.contains("onclick"));
+    }
+
+    #[test]
+    fn regular_markdown_links_survive_sanitization() {
+        let html = render_markdown("[example](https://example.com)");
+
+        assert!(html.contains("href=\"https://example.com\""));
+        assert!(html.contains(">example</a>"));
+    }
+
+    #[test]
+    fn save_document_updates_source_and_html() {
+        let temp_dir = create_temp_test_dir("save");
+        let file_path = temp_dir.join("note.md");
+        fs::write(&file_path, "# Before\n").unwrap();
+
+        let saved = save_document(file_path.clone(), "# After\n".to_string()).unwrap();
+
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), "# After\n");
+        assert_eq!(saved.source, "# After\n");
+        assert!(saved.html.contains("<h1>After</h1>"));
+
+        remove_temp_test_dir(temp_dir);
+    }
+
+    #[test]
+    fn load_folder_picks_sorted_first_markdown_file() {
+        let temp_dir = create_temp_test_dir("folder");
+        fs::write(temp_dir.join("notes.md"), "# Notes\n").unwrap();
+        fs::write(temp_dir.join("README.md"), "# Readme\n").unwrap();
+
+        let folder = load_folder(&temp_dir).unwrap();
+
+        assert!(folder.document.path.unwrap().ends_with("README.md"));
+        assert_eq!(folder.files.len(), 2);
+
+        remove_temp_test_dir(temp_dir);
+    }
+
+    fn create_temp_test_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "barebones-markdown-viewer-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn remove_temp_test_dir(path: PathBuf) {
+        fs::remove_dir_all(path).unwrap();
+    }
 }

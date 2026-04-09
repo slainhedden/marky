@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "test": "node --test dist/viewer.test.js",
     "tauri": "tauri"
   },
   "devDependencies": {
