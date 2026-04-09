@@ -252,7 +252,12 @@ export function createApp({
     });
 
     await appWindow.onCloseRequested(async (event) => {
-      if (state.allowWindowClose || !state.isDirty) {
+      if (state.allowWindowClose) {
+        state.allowWindowClose = false;
+        return;
+      }
+
+      if (!state.isDirty) {
         return;
       }
 
@@ -264,11 +269,17 @@ export function createApp({
         }
 
         state.allowWindowClose = true;
-        await appWindow.close();
+        windowObject.setTimeout(async () => {
+          try {
+            await appWindow.close();
+          } catch (error) {
+            state.allowWindowClose = false;
+            showError(error);
+          }
+        }, 0);
       } catch (error) {
-        showError(error);
-      } finally {
         state.allowWindowClose = false;
+        showError(error);
       }
     });
   }

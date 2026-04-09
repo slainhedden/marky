@@ -80,15 +80,29 @@ function createWindowObject() {
     listeners: {},
     addEventListener(type, handler) {
       this.listeners[type] = handler;
+    },
+    setTimeout(handler) {
+      handler();
+      return 1;
     }
   };
 }
 
 function createAppWindow() {
   return {
+    closeCalls: 0,
+    closeHandler: null,
+    dragDropHandler: null,
+    async close() {
+      this.closeCalls += 1;
+    },
     async destroy() {},
-    async onCloseRequested() {},
-    async onDragDropEvent() {}
+    async onCloseRequested(handler) {
+      this.closeHandler = handler;
+    },
+    async onDragDropEvent(handler) {
+      this.dragDropHandler = handler;
+    }
   };
 }
 
@@ -375,4 +389,56 @@ test("boot loads the saved theme and cycleTheme persists the next one", async ()
   assert.equal(documentObject.documentElement.dataset.theme, "forest");
   assert.equal(elements.themeButton.textContent, "Theme: Forest");
   assert.equal(storage.getItem("barebones-markdown-viewer-theme"), "forest");
+});
+
+test("close requests with unsaved changes schedule a second close", async () => {
+  const elements = createElements();
+  const appWindow = createAppWindow();
+  const app = createApp({
+    appWindow,
+    documentObject: createDocumentObject(),
+    elements,
+    listen: async () => {},
+    showMessage: async () => "Discard",
+    storage: createStorage(),
+    windowObject: createWindowObject(),
+    invoke: async (command) => {
+      if (command === "get_launch_document") {
+        return null;
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  await app.boot();
+  app.showDocument({
+    fileName: "example.md",
+    html: "<h1>Example</h1>",
+    path: "C:/notes/example.md",
+    source: "# Example"
+  });
+
+  elements.toggleViewButton.click();
+  elements.sourceView.value = "# Changed";
+  elements.sourceView.listeners.input?.({ target: elements.sourceView });
+
+  let prevented = false;
+  await appWindow.closeHandler?.({
+    preventDefault() {
+      prevented = true;
+    }
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(appWindow.closeCalls, 1);
+  assert.equal(app.state.allowWindowClose, true);
+
+  await appWindow.closeHandler?.({
+    preventDefault() {
+      throw new Error("second close should not be prevented");
+    }
+  });
+
+  assert.equal(app.state.allowWindowClose, false);
 });
