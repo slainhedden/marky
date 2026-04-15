@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build",
+    "build": "tauri build --bundles nsis",
+    "build:windows": "tauri build --bundles nsis",
+    "build:mac": "tauri build --bundles app,dmg",
     "test": "node --test dist/viewer.test.js",
     "test:window-close": "tauri build --no-bundle && cargo.exe test --manifest-path src-tauri/Cargo.toml --test window_close -- --nocapture",
     "tauri": "tauri"

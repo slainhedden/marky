@@ -53,12 +53,23 @@ From WSL, this also works explicitly:
 cmd.exe /c npm run build
 ```
 
-Build outputs:
+Windows build outputs:
 
 - Release exe: `src-tauri/target/release/barebones-markdown-viewer.exe`
 - Windows installer: `src-tauri/target/release/bundle/nsis/Marky_0.1.0_x64-setup.exe`
 
 The installer uses Tauri's default WebView2 bootstrapper flow, which keeps the installer small and uses the system WebView2 runtime on Windows.
+
+Build the macOS app bundle and DMG from a Mac:
+
+```bash
+npm run build:mac
+```
+
+Typical macOS build outputs:
+
+- App bundle: `src-tauri/target/release/bundle/macos/Marky.app`
+- Disk image: `src-tauri/target/release/bundle/dmg/Marky_0.1.0_aarch64.dmg` or `Marky_0.1.0_x64.dmg`
 
 ## Set As Default For `.md` On Windows
 
