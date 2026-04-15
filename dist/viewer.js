@@ -1,8 +1,12 @@
 const MARKDOWN_EXTENSIONS = ["md", "markdown", "mdown", "mkd"];
 const THEMES = [
-  { id: "midnight", label: "Midnight" },
-  { id: "paper", label: "Paper" },
-  { id: "forest", label: "Forest" }
+  { id: "midnight-dark", label: "Midnight Dark" },
+  { id: "classic-sepia", label: "Classic Sepia" },
+  { id: "solarized-light", label: "Solarized Light" },
+  { id: "deep-ocean", label: "Deep Ocean" },
+  { id: "e-ink-minimalist", label: "E-Ink Minimalist" },
+  { id: "cyberpunk-neon", label: "Cyberpunk Neon" },
+  { id: "arctic-frost", label: "Arctic Frost" }
 ];
 const THEME_STORAGE_KEY = "barebones-markdown-viewer-theme";
 const HIDE_CLUTTER_STORAGE_KEY = "barebones-markdown-viewer-hide-clutter";
@@ -25,6 +29,7 @@ function createState() {
     document: null,
     draftSource: "",
     files: [],
+    folderIncludesClutter: false,
     hideClutterFiles: true,
     folderPath: null,
     isDirty: false,
@@ -147,9 +152,7 @@ export function createApp({
     });
 
     elements.ignoreClutterToggle?.addEventListener("change", () => {
-      state.hideClutterFiles = elements.ignoreClutterToggle.checked;
-      storage?.setItem(HIDE_CLUTTER_STORAGE_KEY, String(state.hideClutterFiles));
-      renderFileTree();
+      void runAction(syncClutterVisibilityPreference);
     });
 
     elements.themeButton.addEventListener("click", cycleTheme);
@@ -226,10 +229,26 @@ export function createApp({
     }
 
     const folderPayload = await invoke("open_markdown_folder", {
-      folderPath: selectedPath
+      folderPath: selectedPath,
+      includeClutter: !state.hideClutterFiles
     });
 
     showFolder(folderPayload);
+  }
+
+  async function syncClutterVisibilityPreference() {
+    state.hideClutterFiles = elements.ignoreClutterToggle.checked;
+    storage?.setItem(HIDE_CLUTTER_STORAGE_KEY, String(state.hideClutterFiles));
+
+    if (!state.hideClutterFiles && state.folderPath && !state.folderIncludesClutter) {
+      const folderPayload = await invoke("open_markdown_folder", {
+        folderPath: state.folderPath,
+        includeClutter: true
+      });
+      applyFolderPayload(folderPayload);
+    }
+
+    renderFileTree();
   }
 
   async function bindWindowEvents() {
@@ -394,9 +413,14 @@ export function createApp({
   }
 
   function showFolder(folderPayload) {
+    applyFolderPayload(folderPayload);
+    showDocument(folderPayload.document);
+  }
+
+  function applyFolderPayload(folderPayload) {
     state.folderPath = folderPayload.folderPath;
     state.files = folderPayload.files;
-    showDocument(folderPayload.document);
+    state.folderIncludesClutter = Boolean(folderPayload.includeClutter);
   }
 
   function showDocument(documentPayload, options = {}) {
@@ -435,6 +459,7 @@ export function createApp({
   function clearFolderState() {
     state.folderPath = null;
     state.files = [];
+    state.folderIncludesClutter = false;
     elements.fileTree.innerHTML = "";
   }
 

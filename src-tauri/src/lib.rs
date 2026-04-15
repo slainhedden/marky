@@ -8,7 +8,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
 };
 use syntect::{
     html::{ClassStyle, ClassedHTMLGenerator},
@@ -20,6 +20,10 @@ use tauri::{Emitter, Manager};
 const OPEN_DOCUMENT_EVENT: &str = "viewer://document-opened";
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
 const CODE_CLASS_PREFIXES: &[&str] = &["syn-", "language-", "code-block", "diff-line"];
+const DOCUMENT_RENDER_CACHE_LIMIT: usize = 16;
+const MAX_HIGHLIGHTED_CODE_BYTES: usize = 64 * 1024;
+const MAX_HIGHLIGHTED_CODE_LINES: usize = 1200;
+const MAX_DIFF_RENDER_LINES: usize = 1200;
 const CLUTTER_FOLDER_NAMES: &[&str] = &[
     ".git",
     ".next",
@@ -58,6 +62,14 @@ struct FolderPayload {
     document: DocumentPayload,
     folder_path: String,
     files: Vec<FolderFileEntry>,
+    include_clutter: bool,
+}
+
+#[derive(Clone)]
+struct CachedDocumentRender {
+    path: String,
+    source: String,
+    html: String,
 }
 
 enum NormalizedFenceLanguage {
@@ -81,9 +93,13 @@ fn open_markdown_path(path: String) -> Result<DocumentPayload, String> {
 }
 
 #[tauri::command]
-async fn open_markdown_folder(folder_path: String) -> Result<FolderPayload, String> {
+async fn open_markdown_folder(
+    folder_path: String,
+    include_clutter: Option<bool>,
+) -> Result<FolderPayload, String> {
     let folder_path = PathBuf::from(folder_path);
-    tauri::async_runtime::spawn_blocking(move || load_folder(&folder_path))
+    let include_clutter = include_clutter.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || load_folder(&folder_path, include_clutter))
         .await
         .map_err(error_message)?
 }
@@ -205,17 +221,20 @@ fn load_document(path: &Path) -> Result<DocumentPayload, String> {
     let absolute_path = path.canonicalize().map_err(error_message)?;
     let bytes = fs::read(&absolute_path).map_err(error_message)?;
     let source = String::from_utf8_lossy(&bytes).into_owned();
+    let html = get_cached_document_html(&absolute_path, &source)
+        .unwrap_or_else(|| render_and_cache_document_html(&absolute_path, &source));
 
-    Ok(build_document_payload(absolute_path, source))
+    Ok(build_document_payload(absolute_path, source, html))
 }
 
 fn save_document(path: PathBuf, source: String) -> Result<DocumentPayload, String> {
     let absolute_path = path.canonicalize().map_err(error_message)?;
     fs::write(&absolute_path, source.as_bytes()).map_err(error_message)?;
-    Ok(build_document_payload(absolute_path, source))
+    let html = render_and_cache_document_html(&absolute_path, &source);
+    Ok(build_document_payload(absolute_path, source, html))
 }
 
-fn build_document_payload(path: PathBuf, source: String) -> DocumentPayload {
+fn build_document_payload(path: PathBuf, source: String, html: String) -> DocumentPayload {
     DocumentPayload {
         file_name: path
             .file_name()
@@ -223,14 +242,54 @@ fn build_document_payload(path: PathBuf, source: String) -> DocumentPayload {
             .unwrap_or_else(|| path.to_string_lossy().into_owned()),
         path: Some(path.to_string_lossy().into_owned()),
         directory: path.parent().map(|parent| parent.to_string_lossy().into_owned()),
-        html: render_markdown(&source),
+        html,
         source,
     }
 }
 
-fn load_folder(directory: &Path) -> Result<FolderPayload, String> {
+fn get_cached_document_html(path: &Path, source: &str) -> Option<String> {
+    let cache = get_document_render_cache().lock().unwrap();
+    let path = path.to_string_lossy();
+
+    cache
+        .iter()
+        .find(|entry| entry.path == path && entry.source == source)
+        .map(|entry| entry.html.clone())
+}
+
+fn render_and_cache_document_html(path: &Path, source: &str) -> String {
+    let html = render_markdown(source);
+    let mut cache = get_document_render_cache().lock().unwrap();
+    let path = path.to_string_lossy().into_owned();
+
+    if let Some(index) = cache.iter().position(|entry| entry.path == path) {
+        cache.remove(index);
+    }
+
+    cache.insert(
+        0,
+        CachedDocumentRender {
+            path,
+            source: source.to_string(),
+            html: html.clone(),
+        },
+    );
+
+    if cache.len() > DOCUMENT_RENDER_CACHE_LIMIT {
+        cache.truncate(DOCUMENT_RENDER_CACHE_LIMIT);
+    }
+
+    html
+}
+
+fn get_document_render_cache() -> &'static Mutex<Vec<CachedDocumentRender>> {
+    static DOCUMENT_RENDER_CACHE: OnceLock<Mutex<Vec<CachedDocumentRender>>> = OnceLock::new();
+    DOCUMENT_RENDER_CACHE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn load_folder(directory: &Path, include_clutter: bool) -> Result<FolderPayload, String> {
     let folder_path = directory.canonicalize().map_err(error_message)?;
-    let mut files = collect_markdown_paths(&folder_path)?;
+    let mut files = collect_markdown_paths(&folder_path, include_clutter)?;
     files.sort_by(compare_markdown_paths);
 
     let Some(initial_path) = select_folder_document(&files) else {
@@ -256,16 +315,21 @@ fn load_folder(directory: &Path) -> Result<FolderPayload, String> {
         document: load_document(&initial_path)?,
         folder_path: folder_path.to_string_lossy().into_owned(),
         files: file_entries,
+        include_clutter,
     })
 }
 
-fn collect_markdown_paths(directory: &Path) -> Result<Vec<PathBuf>, String> {
+fn collect_markdown_paths(directory: &Path, include_clutter: bool) -> Result<Vec<PathBuf>, String> {
     let mut paths = Vec::new();
-    collect_markdown_paths_into(directory, &mut paths)?;
+    collect_markdown_paths_into(directory, &mut paths, include_clutter)?;
     Ok(paths)
 }
 
-fn collect_markdown_paths_into(directory: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_markdown_paths_into(
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+    include_clutter: bool,
+) -> Result<(), String> {
     let entries = fs::read_dir(directory).map_err(error_message)?;
 
     for entry in entries {
@@ -273,7 +337,11 @@ fn collect_markdown_paths_into(directory: &Path, paths: &mut Vec<PathBuf>) -> Re
         let path = entry.path();
 
         if path.is_dir() {
-            collect_markdown_paths_into(&path, paths)?;
+            if !include_clutter && is_clutter_directory(&path) {
+                continue;
+            }
+
+            collect_markdown_paths_into(&path, paths, include_clutter)?;
             continue;
         }
 
@@ -290,10 +358,16 @@ fn render_markdown(source: &str) -> String {
 }
 
 fn render_markdown_html(source: &str) -> String {
+    if !contains_fenced_code_block(source) {
+        let mut html_output = String::with_capacity(initial_html_capacity(source));
+        html::push_html(&mut html_output, Parser::new_ext(source, markdown_options()));
+        return html_output;
+    }
+
     let parser = Parser::new_ext(source, markdown_options());
     let mut events = parser.into_iter();
     let mut buffered_events = Vec::new();
-    let mut html_output = String::new();
+    let mut html_output = String::with_capacity(initial_html_capacity(source));
 
     while let Some(event) = events.next() {
         match event {
@@ -322,6 +396,14 @@ fn render_markdown_html(source: &str) -> String {
     html_output
 }
 
+fn contains_fenced_code_block(source: &str) -> bool {
+    source.contains("```") || source.contains("~~~")
+}
+
+fn initial_html_capacity(source: &str) -> usize {
+    source.len().saturating_add(source.len() / 2)
+}
+
 fn render_code_block(language: NormalizedFenceLanguage, code: &str) -> String {
     match language {
         NormalizedFenceLanguage::PlainText => render_plain_code_block("plain", code),
@@ -334,6 +416,10 @@ fn render_code_block(language: NormalizedFenceLanguage, code: &str) -> String {
 }
 
 fn render_syntax_highlighted_block(syntax_token: &str, class_token: &str, code: &str) -> String {
+    if exceeds_highlight_threshold(code) {
+        return render_plain_code_block(class_token, code);
+    }
+
     let Some(syntax) = find_syntax_by_token(syntax_token) else {
         return render_plain_code_block("plain", code);
     };
@@ -368,17 +454,33 @@ fn render_syntax_highlighted_block(syntax_token: &str, class_token: &str, code: 
     )
 }
 
+fn exceeds_highlight_threshold(code: &str) -> bool {
+    if code.len() > MAX_HIGHLIGHTED_CODE_BYTES {
+        return true;
+    }
+
+    code.lines().take(MAX_HIGHLIGHTED_CODE_LINES + 1).count() > MAX_HIGHLIGHTED_CODE_LINES
+}
+
 fn render_plain_code_block(class_token: &str, code: &str) -> String {
     render_wrapped_code_block("code-block", class_token, &escape_html(code))
 }
 
 fn render_diff_block(code: &str) -> String {
+    if exceeds_diff_render_threshold(code) {
+        return render_plain_code_block("diff", code);
+    }
+
     let mut inner_html = String::new();
     for line in code.split_inclusive('\n') {
         inner_html.push_str(&render_diff_line(line));
     }
 
     render_wrapped_code_block("code-block code-block--diff", "diff", &inner_html)
+}
+
+fn exceeds_diff_render_threshold(code: &str) -> bool {
+    code.lines().take(MAX_DIFF_RENDER_LINES + 1).count() > MAX_DIFF_RENDER_LINES
 }
 
 fn render_diff_line(line: &str) -> String {
@@ -430,31 +532,38 @@ fn render_wrapped_code_block(pre_classes: &str, class_token: &str, inner_html: &
 }
 
 fn sanitize_html(html: &str) -> String {
-    let mut sanitizer = HtmlSanitizer::default();
-    sanitizer.add_tags(&["span"]);
-    sanitizer.add_generic_attributes(&["class"]);
-    sanitizer.attribute_filter(|tag, attribute, value| {
-        if attribute != "class" {
-            return Some(Cow::Borrowed(value));
-        }
+    get_html_sanitizer().clean(html).to_string()
+}
 
-        if !matches!(tag, "pre" | "code" | "span") {
-            return None;
-        }
+fn get_html_sanitizer() -> &'static HtmlSanitizer<'static> {
+    static HTML_SANITIZER: OnceLock<HtmlSanitizer<'static>> = OnceLock::new();
+    HTML_SANITIZER.get_or_init(|| {
+        let mut sanitizer = HtmlSanitizer::default();
+        sanitizer.add_tags(&["span"]);
+        sanitizer.add_generic_attributes(&["class"]);
+        sanitizer.attribute_filter(|tag, attribute, value| {
+            if attribute != "class" {
+                return Some(Cow::Borrowed(value));
+            }
 
-        let filtered = value
-            .split_whitespace()
-            .filter(|class_name| is_allowed_code_class(class_name))
-            .collect::<Vec<_>>();
+            if !matches!(tag, "pre" | "code" | "span") {
+                return None;
+            }
 
-        if filtered.is_empty() {
-            None
-        } else {
-            Some(Cow::Owned(filtered.join(" ")))
-        }
-    });
+            let filtered = value
+                .split_whitespace()
+                .filter(|class_name| is_allowed_code_class(class_name))
+                .collect::<Vec<_>>();
 
-    sanitizer.clean(html).to_string()
+            if filtered.is_empty() {
+                None
+            } else {
+                Some(Cow::Owned(filtered.join(" ")))
+            }
+        });
+
+        sanitizer
+    })
 }
 
 fn normalize_fence_language(info: &str) -> NormalizedFenceLanguage {
@@ -640,9 +749,19 @@ fn is_clutter_markdown_path(path: &Path) -> bool {
             return false;
         };
 
-        let folder_name = segment.to_string_lossy().to_ascii_lowercase();
-        CLUTTER_FOLDER_NAMES.contains(&folder_name.as_str())
+        is_clutter_folder_name(segment.to_string_lossy().as_ref())
     })
+}
+
+fn is_clutter_directory(path: &Path) -> bool {
+    path.file_name()
+        .map(|name| is_clutter_folder_name(name.to_string_lossy().as_ref()))
+        .unwrap_or(false)
+}
+
+fn is_clutter_folder_name(name: &str) -> bool {
+    let folder_name = name.to_ascii_lowercase();
+    CLUTTER_FOLDER_NAMES.contains(&folder_name.as_str())
 }
 
 fn error_message(error: impl std::fmt::Display) -> String {
@@ -651,12 +770,13 @@ fn error_message(error: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_clutter_markdown_path, load_folder, render_markdown, save_document};
+    use super::{is_clutter_markdown_path, load_document, load_folder, render_markdown, save_document};
     use std::path::Path;
     use std::{
         env,
         fs,
         path::PathBuf,
+        time::Instant,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -732,7 +852,7 @@ mod tests {
         fs::write(temp_dir.join("notes.md"), "# Notes\n").unwrap();
         fs::write(temp_dir.join("README.md"), "# Readme\n").unwrap();
 
-        let folder = load_folder(&temp_dir).unwrap();
+        let folder = load_folder(&temp_dir, true).unwrap();
 
         assert!(folder.document.path.unwrap().ends_with("README.md"));
         assert_eq!(folder.files.len(), 2);
@@ -748,7 +868,7 @@ mod tests {
         fs::write(clutter_dir.join("api.md"), "# API\n").unwrap();
         fs::write(temp_dir.join("guide.md"), "# Guide\n").unwrap();
 
-        let folder = load_folder(&temp_dir).unwrap();
+        let folder = load_folder(&temp_dir, true).unwrap();
 
         assert!(folder.document.path.unwrap().ends_with("guide.md"));
         assert_eq!(folder.files.len(), 2);
@@ -760,6 +880,226 @@ mod tests {
     fn clutter_detection_matches_hidden_folder_names() {
         assert!(is_clutter_markdown_path(Path::new("/tmp/project/.venv/docs/api.md")));
         assert!(!is_clutter_markdown_path(Path::new("/tmp/project/docs/api.md")));
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_render_markdown_plain_document() {
+        let source = create_plain_benchmark_markdown(500);
+        benchmark_render_case("render_plain", &source, 60);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_render_markdown_code_heavy_document() {
+        let source = create_code_heavy_benchmark_markdown(180);
+        benchmark_render_case("render_code_heavy", &source, 30);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_render_markdown_huge_code_block_document() {
+        let source = create_huge_code_benchmark_markdown(6000);
+        benchmark_render_case("render_huge_code_block", &source, 10);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_render_markdown_huge_diff_block_document() {
+        let source = create_huge_diff_benchmark_markdown(6000);
+        benchmark_render_case("render_huge_diff_block", &source, 10);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_load_document_plain_file() {
+        let temp_dir = create_temp_test_dir("bench-load");
+        let file_path = temp_dir.join("benchmark.md");
+        fs::write(&file_path, create_plain_benchmark_markdown(500)).unwrap();
+
+        let mut durations = Vec::new();
+        for _ in 0..5 {
+            let _ = load_document(&file_path).unwrap();
+        }
+
+        for _ in 0..60 {
+            let start = Instant::now();
+            let payload = load_document(&file_path).unwrap();
+            let elapsed = start.elapsed();
+            assert!(!payload.html.is_empty());
+            durations.push(elapsed.as_secs_f64() * 1000.0);
+        }
+
+        print_benchmark_result("load_plain_file", &durations);
+        remove_temp_test_dir(temp_dir);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_load_folder_with_clutter_tree() {
+        let temp_dir = create_temp_test_dir("bench-folder");
+        fs::write(temp_dir.join("README.md"), "# Readme\n").unwrap();
+
+        for index in 0..80 {
+            let docs_dir = temp_dir.join("docs").join(format!("section-{index:03}"));
+            fs::create_dir_all(&docs_dir).unwrap();
+            fs::write(
+                docs_dir.join("page.md"),
+                format!("# Section {index}\n\n{}", create_plain_benchmark_markdown(10)),
+            )
+            .unwrap();
+        }
+
+        for index in 0..30 {
+            let clutter_dir = temp_dir
+                .join("node_modules")
+                .join(format!("package-{index:03}"))
+                .join("docs");
+            fs::create_dir_all(&clutter_dir).unwrap();
+            fs::write(
+                clutter_dir.join("generated.md"),
+                format!("# Generated {index}\n\n{}", create_plain_benchmark_markdown(10)),
+            )
+            .unwrap();
+        }
+
+        let mut durations = Vec::new();
+        for _ in 0..5 {
+            let _ = load_folder(&temp_dir, false).unwrap();
+        }
+
+        for _ in 0..30 {
+            let start = Instant::now();
+            let payload = load_folder(&temp_dir, false).unwrap();
+            let elapsed = start.elapsed();
+            assert!(!payload.files.is_empty());
+            durations.push(elapsed.as_secs_f64() * 1000.0);
+        }
+
+        print_benchmark_result("load_folder_skipping_clutter", &durations);
+        remove_temp_test_dir(temp_dir);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_load_folder_including_clutter_tree() {
+        let temp_dir = create_temp_test_dir("bench-folder-full");
+        fs::write(temp_dir.join("README.md"), "# Readme\n").unwrap();
+
+        for index in 0..80 {
+            let docs_dir = temp_dir.join("docs").join(format!("section-{index:03}"));
+            fs::create_dir_all(&docs_dir).unwrap();
+            fs::write(
+                docs_dir.join("page.md"),
+                format!("# Section {index}\n\n{}", create_plain_benchmark_markdown(10)),
+            )
+            .unwrap();
+        }
+
+        for index in 0..30 {
+            let clutter_dir = temp_dir
+                .join("node_modules")
+                .join(format!("package-{index:03}"))
+                .join("docs");
+            fs::create_dir_all(&clutter_dir).unwrap();
+            fs::write(
+                clutter_dir.join("generated.md"),
+                format!("# Generated {index}\n\n{}", create_plain_benchmark_markdown(10)),
+            )
+            .unwrap();
+        }
+
+        let mut durations = Vec::new();
+        for _ in 0..5 {
+            let _ = load_folder(&temp_dir, true).unwrap();
+        }
+
+        for _ in 0..30 {
+            let start = Instant::now();
+            let payload = load_folder(&temp_dir, true).unwrap();
+            let elapsed = start.elapsed();
+            assert!(!payload.files.is_empty());
+            durations.push(elapsed.as_secs_f64() * 1000.0);
+        }
+
+        print_benchmark_result("load_folder_including_clutter", &durations);
+        remove_temp_test_dir(temp_dir);
+    }
+
+    fn benchmark_render_case(label: &str, source: &str, iterations: usize) {
+        let mut durations = Vec::new();
+
+        for _ in 0..5 {
+            let html = render_markdown(source);
+            assert!(!html.is_empty());
+        }
+
+        for _ in 0..iterations {
+            let start = Instant::now();
+            let html = render_markdown(source);
+            let elapsed = start.elapsed();
+            assert!(!html.is_empty());
+            durations.push(elapsed.as_secs_f64() * 1000.0);
+        }
+
+        print_benchmark_result(label, &durations);
+    }
+
+    fn print_benchmark_result(label: &str, durations_ms: &[f64]) {
+        let total = durations_ms.iter().sum::<f64>();
+        let average = total / durations_ms.len() as f64;
+        let best = durations_ms.iter().copied().fold(f64::INFINITY, f64::min);
+        let worst = durations_ms.iter().copied().fold(0.0, f64::max);
+        println!(
+            "BENCH {label} avg_ms={average:.3} best_ms={best:.3} worst_ms={worst:.3} iterations={}",
+            durations_ms.len()
+        );
+    }
+
+    fn create_plain_benchmark_markdown(section_count: usize) -> String {
+        let mut source = String::new();
+        for index in 0..section_count {
+            source.push_str(&format!(
+                "## Section {index}\n\nThis is a paragraph with a [link](https://example.com/{index}) and some `inline code`.\n\n- Item one\n- Item two\n- Item three\n\n> Quoted text for section {index}.\n\n"
+            ));
+        }
+        source
+    }
+
+    fn create_code_heavy_benchmark_markdown(block_count: usize) -> String {
+        let mut source = String::new();
+        for index in 0..block_count {
+            source.push_str(&format!(
+                "## Example {index}\n\n```rust\nfn sample_{index}() {{\n    println!(\"hello {index}\");\n}}\n```\n\n```diff\n-old line {index}\n+new line {index}\n@@ hunk {index} @@\n```\n\n"
+            ));
+        }
+        source
+    }
+
+    fn create_huge_code_benchmark_markdown(line_count: usize) -> String {
+        let mut source = String::from("## Huge Block\n\n```rust\n");
+        for index in 0..line_count {
+            source.push_str(&format!(
+                "fn sample_{index}() {{ println!(\"line {index}: {{}}\", {index}); }}\n"
+            ));
+        }
+        source.push_str("```\n");
+        source
+    }
+
+    fn create_huge_diff_benchmark_markdown(line_count: usize) -> String {
+        let mut source = String::from("## Huge Diff\n\n```diff\n");
+        for index in 0..line_count {
+            let prefix = match index % 4 {
+                0 => "+",
+                1 => "-",
+                2 => "@@ hunk @@ ",
+                _ => " ",
+            };
+            source.push_str(&format!("{prefix}line {index}\n"));
+        }
+        source.push_str("```\n");
+        source
     }
 
     fn create_temp_test_dir(label: &str) -> PathBuf {

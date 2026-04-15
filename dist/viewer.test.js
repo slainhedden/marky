@@ -155,8 +155,8 @@ test("openFile shows the selected document", async () => {
   assert.equal(elements.renderedView.scrollTop, 0);
   assert.equal(elements.sourceView.scrollTop, 0);
   assert.equal(elements.errorBanner.hidden, true);
-  assert.equal(documentObject.documentElement.dataset.theme, "midnight");
-  assert.equal(elements.themeButton.textContent, "Theme: Midnight");
+  assert.equal(documentObject.documentElement.dataset.theme, "midnight-dark");
+  assert.equal(elements.themeButton.textContent, "Theme: Midnight Dark");
 });
 
 test("editing source marks the document dirty and save updates the document", async () => {
@@ -298,7 +298,7 @@ test("folder mode file switches use direct document opens", async () => {
       }
 
       if (command === "open_markdown_folder") {
-        assert.deepEqual(args, { folderPath: "C:/notes" });
+        assert.deepEqual(args, { folderPath: "C:/notes", includeClutter: false });
         return {
           document: {
             fileName: "README.md",
@@ -310,6 +310,7 @@ test("folder mode file switches use direct document opens", async () => {
             { name: "README.md", path: "C:/notes/README.md", relativePath: "README.md" },
             { name: "next.md", path: "C:/notes/next.md", relativePath: "next.md" }
           ],
+          includeClutter: false,
           folderPath: "C:/notes"
         };
       }
@@ -334,7 +335,7 @@ test("folder mode file switches use direct document opens", async () => {
 
   assert.deepEqual(calls, [
     { command: "get_launch_document", args: undefined },
-    { command: "open_markdown_folder", args: { folderPath: "C:/notes" } },
+    { command: "open_markdown_folder", args: { folderPath: "C:/notes", includeClutter: false } },
     { command: "open_markdown_path", args: { path: "C:/notes/next.md" } }
   ]);
   assert.equal(app.state.folderPath, "C:/notes");
@@ -343,6 +344,7 @@ test("folder mode file switches use direct document opens", async () => {
 
 test("folder mode hides clutter markdown files by default and can show them again", async () => {
   const elements = createElements();
+  const calls = [];
   const app = createApp({
     appWindow: createAppWindow(),
     documentObject: createDocumentObject(),
@@ -354,12 +356,28 @@ test("folder mode hides clutter markdown files by default and can show them agai
     },
     storage: createStorage(),
     windowObject: createWindowObject(),
-    invoke: async (command) => {
+    invoke: async (command, args) => {
+      calls.push({ command, args });
+
       if (command === "get_launch_document") {
         return null;
       }
 
       if (command === "open_markdown_folder") {
+        if (args?.includeClutter === false) {
+          return {
+            document: {
+              fileName: "README.md",
+              html: "<h1>Readme</h1>",
+              path: "C:/notes/README.md",
+              source: "# Readme"
+            },
+            files: [{ name: "README.md", path: "C:/notes/README.md", relativePath: "README.md" }],
+            includeClutter: false,
+            folderPath: "C:/notes"
+          };
+        }
+
         return {
           document: {
             fileName: "README.md",
@@ -375,6 +393,7 @@ test("folder mode hides clutter markdown files by default and can show them agai
               relativePath: ".venv/docs/api.md"
             }
           ],
+          includeClutter: true,
           folderPath: "C:/notes"
         };
       }
@@ -390,9 +409,14 @@ test("folder mode hides clutter markdown files by default and can show them agai
   assert.doesNotMatch(elements.fileTree.innerHTML, /\.venv\/docs\/api\.md/);
 
   elements.ignoreClutterToggle.checked = false;
-  elements.ignoreClutterToggle.listeners.change?.({ target: elements.ignoreClutterToggle });
+  await elements.ignoreClutterToggle.listeners.change?.({ target: elements.ignoreClutterToggle });
 
   assert.match(elements.fileTree.innerHTML, /\.venv\/docs\/api\.md/);
+  assert.deepEqual(calls, [
+    { command: "get_launch_document", args: undefined },
+    { command: "open_markdown_folder", args: { folderPath: "C:/notes", includeClutter: false } },
+    { command: "open_markdown_folder", args: { folderPath: "C:/notes", includeClutter: true } }
+  ]);
 });
 
 test("readSingleDialogSelection unwraps one-item arrays", () => {
@@ -409,7 +433,7 @@ test("readSingleDialogSelection rejects multi-select results", () => {
 test("boot loads the saved theme and cycleTheme persists the next one", async () => {
   const elements = createElements();
   const documentObject = createDocumentObject();
-  const storage = createStorage("paper");
+  const storage = createStorage("classic-sepia");
   const app = createApp({
     appWindow: createAppWindow(),
     documentObject,
@@ -430,16 +454,16 @@ test("boot loads the saved theme and cycleTheme persists the next one", async ()
   });
 
   await app.boot();
-  assert.equal(app.state.themeId, "paper");
-  assert.equal(documentObject.documentElement.dataset.theme, "paper");
-  assert.equal(elements.themeButton.textContent, "Theme: Paper");
+  assert.equal(app.state.themeId, "classic-sepia");
+  assert.equal(documentObject.documentElement.dataset.theme, "classic-sepia");
+  assert.equal(elements.themeButton.textContent, "Theme: Classic Sepia");
 
   elements.themeButton.click();
 
-  assert.equal(app.state.themeId, "forest");
-  assert.equal(documentObject.documentElement.dataset.theme, "forest");
-  assert.equal(elements.themeButton.textContent, "Theme: Forest");
-  assert.equal(storage.getItem("barebones-markdown-viewer-theme"), "forest");
+  assert.equal(app.state.themeId, "solarized-light");
+  assert.equal(documentObject.documentElement.dataset.theme, "solarized-light");
+  assert.equal(elements.themeButton.textContent, "Theme: Solarized Light");
+  assert.equal(storage.getItem("barebones-markdown-viewer-theme"), "solarized-light");
 });
 
 test("close requests with unsaved changes are prevented when canceled", async () => {
