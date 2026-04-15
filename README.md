@@ -1,25 +1,68 @@
 # Marky
 
-A tiny Windows-first markdown viewer built to do one job well: open local `.md` files quickly, render them cleanly, and let you switch to raw source when you want.
+A tiny markdown viewer for opening local `.md` files fast, reading them cleanly, and dropping into source when you need to edit.
 
-## What it does
+> Marky is intentionally small. It is a desktop utility, not a workspace, sync service, or note-taking platform.
 
-- Opens local markdown files from the file picker
-- Opens a folder and picks `README*`, then `index*`, then the first markdown file
-- Shows a left file tree for folder opens so you can switch between markdown files
-- Opens files passed on launch, including installer-based file associations
-- Supports drag and drop
-- Opens into rendered view every time, with one button to toggle source
-- Lets you edit raw source and save it back to disk with `Ctrl+S` or the `Save` button
-- Keeps `Open File`, `Open Folder`, `Save`, theme, and view toggle controls available in the app toolbar
-- Prompts before discarding unsaved changes when you switch files, follow local links, or close the window
-- Cycles between built-in themes and remembers the last one you picked
-- Renders headings, lists, quotes, links, code blocks, and tables
-- Adds syntax highlighting for fenced code blocks with plain-text fallback for unknown languages
-- Renders `diff` and `patch` fences with added and removed lines tinted clearly
-- Uses a fixed dark, GitHub-like reading style
+## Highlights
 
-## Run
+- Opens local markdown files directly from the app, drag and drop, or OS file associations
+- Renders sanitized markdown in a simple desktop window with syntax-highlighted fenced code blocks
+- Switches between rendered view and raw source with quick editing and save prompts
+- Opens folders of markdown files with a sidebar and predictable first-file selection
+- Builds for Windows locally and can now be built for macOS from a Mac
+
+## Overview
+
+Marky is a Tauri app with a plain HTML/CSS/JS frontend and a Rust backend. The Rust side handles markdown loading, folder scanning, sanitization, and OS integration. The frontend stays simple and focuses on presentation, file switching, and edit state.
+
+The project is optimized for people who just want to open markdown files on their machine without pulling in a full editor. It is currently Windows-first in its release posture, but the build setup now also supports macOS packaging from a Mac.
+
+### Author
+
+Built by [@slainhedden](https://github.com/slainhedden).
+
+## Usage
+
+Open a file and read it:
+
+```text
+File -> Open File
+```
+
+Open a folder of docs and browse the markdown files from the sidebar:
+
+```text
+File -> Open Folder
+```
+
+Edit raw source, then save with:
+
+```text
+Ctrl+S
+```
+
+Marky also supports:
+
+- Drag and drop
+- Opening a markdown file from the command line or file association
+- Theme cycling
+- Rendered/source view toggling
+- Prompts before discarding unsaved changes
+
+## Installation
+
+There is not a package-manager install flow yet. For now, use a built desktop artifact:
+
+- Windows: run the NSIS installer
+- macOS: open the generated `.dmg` and move `Marky.app` into `Applications`
+
+Supported targets:
+
+- Windows
+- macOS, built on macOS
+
+## Build From Source
 
 Install dependencies:
 
@@ -33,13 +76,11 @@ Start the app in development mode:
 npm run dev
 ```
 
-If you are launching from WSL and want to force the Windows-side toolchain:
+If you are launching from WSL and want the Windows-side toolchain explicitly:
 
 ```bash
 cmd.exe /c npm run dev
 ```
-
-## Build
 
 Build the Windows release executable and NSIS installer:
 
@@ -47,18 +88,22 @@ Build the Windows release executable and NSIS installer:
 npm run build
 ```
 
-From WSL, this also works explicitly:
+Or explicitly:
+
+```bash
+npm run build:windows
+```
+
+From WSL:
 
 ```bash
 cmd.exe /c npm run build
 ```
 
-Windows build outputs:
+Typical Windows build outputs:
 
-- Release exe: `src-tauri/target/release/barebones-markdown-viewer.exe`
-- Windows installer: `src-tauri/target/release/bundle/nsis/Marky_0.1.0_x64-setup.exe`
-
-The installer uses Tauri's default WebView2 bootstrapper flow, which keeps the installer small and uses the system WebView2 runtime on Windows.
+- `src-tauri/target/release/barebones-markdown-viewer.exe`
+- `src-tauri/target/release/bundle/nsis/Marky_0.1.0_x64-setup.exe`
 
 Build the macOS app bundle and DMG from a Mac:
 
@@ -68,23 +113,17 @@ npm run build:mac
 
 Typical macOS build outputs:
 
-- App bundle: `src-tauri/target/release/bundle/macos/Marky.app`
-- Disk image: `src-tauri/target/release/bundle/dmg/Marky_0.1.0_aarch64.dmg` or `Marky_0.1.0_x64.dmg`
+- `src-tauri/target/release/bundle/macos/Marky.app`
+- `src-tauri/target/release/bundle/dmg/Marky_0.1.0_aarch64.dmg`
+- `src-tauri/target/release/bundle/dmg/Marky_0.1.0_x64.dmg`
 
-## Set As Default For `.md` On Windows
+## Set Marky As Default For `.md` On Windows
 
 1. Run the installer.
 2. Right-click any `.md` file in Explorer.
 3. Choose `Open with`.
 4. Choose `Marky`.
 5. Turn on `Always use this app to open .md files`.
-
-You can also set it from Windows Settings:
-
-1. Open `Settings`.
-2. Go to `Apps` > `Default apps`.
-3. Search for `.md`.
-4. Select `Marky` for that file type.
 
 The installer is configured to register markdown file associations for:
 
@@ -95,8 +134,11 @@ The installer is configured to register markdown file associations for:
 
 ## Notes
 
-- The frontend is static HTML/CSS/JS in `dist/`.
-- Markdown is rendered in Rust and sanitized before it reaches the UI.
-- Syntax highlighting stays backend-rendered and theme-aware. The frontend still just displays sanitized HTML.
-- Source mode is still intentionally plain. It is a quick-edit textarea, not a full editor.
-- Folder mode scans once when you open a folder, then reuses the cached sidebar list for file switches.
+- The frontend lives in `dist/` and stays framework-free.
+- Markdown is rendered and sanitized in Rust before it reaches the UI.
+- Source mode is intentionally a simple textarea, not a full editor.
+- Folder mode scans once when you open a folder, then reuses the file list for navigation.
+
+## Feedback and Contributing
+
+Open an issue if you hit a bug or want a focused feature. If you want to contribute, keep changes aligned with the project’s core constraint: a very small, skimmable markdown viewer with minimal dependencies.
