@@ -34,6 +34,7 @@ function createElements() {
     emptyState: createElement(),
     errorBanner: { ...createElement(), hidden: true },
     fileTree: createElement(),
+    ignoreClutterToggle: { ...createElement(), checked: true },
     renderedView: createElement(),
     saveButton: createElement(),
     sidebar: createElement(),
@@ -338,6 +339,60 @@ test("folder mode file switches use direct document opens", async () => {
   ]);
   assert.equal(app.state.folderPath, "C:/notes");
   assert.equal(app.state.document?.path, "C:/notes/next.md");
+});
+
+test("folder mode hides clutter markdown files by default and can show them again", async () => {
+  const elements = createElements();
+  const app = createApp({
+    appWindow: createAppWindow(),
+    documentObject: createDocumentObject(),
+    elements,
+    listen: async () => {},
+    openDialog: async () => ["C:/notes"],
+    showMessage: async () => {
+      throw new Error("showMessage should not be called");
+    },
+    storage: createStorage(),
+    windowObject: createWindowObject(),
+    invoke: async (command) => {
+      if (command === "get_launch_document") {
+        return null;
+      }
+
+      if (command === "open_markdown_folder") {
+        return {
+          document: {
+            fileName: "README.md",
+            html: "<h1>Readme</h1>",
+            path: "C:/notes/README.md",
+            source: "# Readme"
+          },
+          files: [
+            { name: "README.md", path: "C:/notes/README.md", relativePath: "README.md" },
+            {
+              name: "api.md",
+              path: "C:/notes/.venv/docs/api.md",
+              relativePath: ".venv/docs/api.md"
+            }
+          ],
+          folderPath: "C:/notes"
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  await app.boot();
+  await app.openFolder();
+
+  assert.match(elements.fileTree.innerHTML, /README\.md/);
+  assert.doesNotMatch(elements.fileTree.innerHTML, /\.venv\/docs\/api\.md/);
+
+  elements.ignoreClutterToggle.checked = false;
+  elements.ignoreClutterToggle.listeners.change?.({ target: elements.ignoreClutterToggle });
+
+  assert.match(elements.fileTree.innerHTML, /\.venv\/docs\/api\.md/);
 });
 
 test("readSingleDialogSelection unwraps one-item arrays", () => {

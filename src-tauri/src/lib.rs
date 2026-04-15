@@ -20,6 +20,19 @@ use tauri::{Emitter, Manager};
 const OPEN_DOCUMENT_EVENT: &str = "viewer://document-opened";
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
 const CODE_CLASS_PREFIXES: &[&str] = &["syn-", "language-", "code-block", "diff-line"];
+const CLUTTER_FOLDER_NAMES: &[&str] = &[
+    ".git",
+    ".next",
+    ".pytest_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "target",
+    "venv",
+];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -615,7 +628,21 @@ fn folder_priority(path: &Path) -> usize {
 }
 
 fn select_folder_document(files: &[PathBuf]) -> Option<PathBuf> {
-    files.first().cloned()
+    files.iter()
+        .find(|path| !is_clutter_markdown_path(path))
+        .cloned()
+        .or_else(|| files.first().cloned())
+}
+
+fn is_clutter_markdown_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let std::path::Component::Normal(segment) = component else {
+            return false;
+        };
+
+        let folder_name = segment.to_string_lossy().to_ascii_lowercase();
+        CLUTTER_FOLDER_NAMES.contains(&folder_name.as_str())
+    })
 }
 
 fn error_message(error: impl std::fmt::Display) -> String {
@@ -624,7 +651,8 @@ fn error_message(error: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_folder, render_markdown, save_document};
+    use super::{is_clutter_markdown_path, load_folder, render_markdown, save_document};
+    use std::path::Path;
     use std::{
         env,
         fs,
@@ -710,6 +738,28 @@ mod tests {
         assert_eq!(folder.files.len(), 2);
 
         remove_temp_test_dir(temp_dir);
+    }
+
+    #[test]
+    fn load_folder_skips_clutter_markdown_for_initial_document() {
+        let temp_dir = create_temp_test_dir("folder-clutter");
+        let clutter_dir = temp_dir.join(".venv").join("docs");
+        fs::create_dir_all(&clutter_dir).unwrap();
+        fs::write(clutter_dir.join("api.md"), "# API\n").unwrap();
+        fs::write(temp_dir.join("guide.md"), "# Guide\n").unwrap();
+
+        let folder = load_folder(&temp_dir).unwrap();
+
+        assert!(folder.document.path.unwrap().ends_with("guide.md"));
+        assert_eq!(folder.files.len(), 2);
+
+        remove_temp_test_dir(temp_dir);
+    }
+
+    #[test]
+    fn clutter_detection_matches_hidden_folder_names() {
+        assert!(is_clutter_markdown_path(Path::new("/tmp/project/.venv/docs/api.md")));
+        assert!(!is_clutter_markdown_path(Path::new("/tmp/project/docs/api.md")));
     }
 
     fn create_temp_test_dir(label: &str) -> PathBuf {

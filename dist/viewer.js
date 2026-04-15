@@ -5,12 +5,27 @@ const THEMES = [
   { id: "forest", label: "Forest" }
 ];
 const THEME_STORAGE_KEY = "barebones-markdown-viewer-theme";
+const HIDE_CLUTTER_STORAGE_KEY = "barebones-markdown-viewer-hide-clutter";
+const CLUTTER_FOLDERS = new Set([
+  ".git",
+  ".next",
+  ".pytest_cache",
+  ".venv",
+  "__pycache__",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "target",
+  "venv"
+]);
 
 function createState() {
   return {
     document: null,
     draftSource: "",
     files: [],
+    hideClutterFiles: true,
     folderPath: null,
     isDirty: false,
     isSaving: false,
@@ -28,6 +43,7 @@ function getBrowserElements(documentObject) {
     emptyState: documentObject.querySelector("#empty-state"),
     errorBanner: documentObject.querySelector("#error-banner"),
     fileTree: documentObject.querySelector("#file-tree"),
+    ignoreClutterToggle: documentObject.querySelector("#sidebar-ignore-clutter"),
     renderedView: documentObject.querySelector("#rendered-view"),
     saveButton: documentObject.querySelector("#save-button"),
     sidebar: documentObject.querySelector("#sidebar"),
@@ -98,6 +114,7 @@ export function createApp({
 
   async function boot() {
     loadTheme();
+    loadSidebarPreferences();
     bindUi();
     applyShellState();
     await bindWindowEvents();
@@ -127,6 +144,12 @@ export function createApp({
 
     elements.sourceView.addEventListener("input", () => {
       updateDraftSource(elements.sourceView.value);
+    });
+
+    elements.ignoreClutterToggle?.addEventListener("change", () => {
+      state.hideClutterFiles = elements.ignoreClutterToggle.checked;
+      storage?.setItem(HIDE_CLUTTER_STORAGE_KEY, String(state.hideClutterFiles));
+      renderFileTree();
     });
 
     elements.themeButton.addEventListener("click", cycleTheme);
@@ -440,6 +463,15 @@ export function createApp({
     applyTheme(themeId);
   }
 
+  function loadSidebarPreferences() {
+    const storedValue = storage?.getItem(HIDE_CLUTTER_STORAGE_KEY);
+    state.hideClutterFiles = storedValue !== "false";
+
+    if (elements.ignoreClutterToggle) {
+      elements.ignoreClutterToggle.checked = state.hideClutterFiles;
+    }
+  }
+
   function applyTheme(themeId) {
     const theme = getTheme(themeId);
     state.themeId = theme.id;
@@ -475,7 +507,15 @@ export function createApp({
     }
 
     const activePath = state.document?.path ?? "";
-    elements.fileTree.innerHTML = state.files
+    const visibleFiles = state.files.filter((file) => shouldShowFileInTree(file, state.hideClutterFiles));
+
+    if (visibleFiles.length === 0) {
+      elements.fileTree.innerHTML =
+        '<p class="file-tree__empty">No markdown files match the current filter.</p>';
+      return;
+    }
+
+    elements.fileTree.innerHTML = visibleFiles
       .map((file) => {
         const buttonClass =
           file.path === activePath ? "file-tree__item is-active" : "file-tree__item";
@@ -627,4 +667,16 @@ function isPathInFolder(path, folderPath) {
     normalizedPath.startsWith(`${normalizedFolder}\\`) ||
     normalizedPath.startsWith(`${normalizedFolder}/`)
   );
+}
+
+function shouldShowFileInTree(file, hideClutterFiles) {
+  return !hideClutterFiles || !isClutterMarkdownFile(file.relativePath ?? file.path ?? "");
+}
+
+function isClutterMarkdownFile(path) {
+  const normalizedPath = path.replaceAll("\\", "/").toLowerCase();
+  return normalizedPath
+    .split("/")
+    .filter(Boolean)
+    .some((segment) => CLUTTER_FOLDERS.has(segment));
 }
