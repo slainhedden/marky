@@ -1,5 +1,8 @@
 node_modules/
 src-tauri/target/
+.codex
+src-tauri/2
+docs/optimization/
 *.md
 !README.md
 !barebones-markdown-viewer-idea.md
