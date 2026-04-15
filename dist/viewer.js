@@ -10,6 +10,7 @@ const THEMES = [
 ];
 const THEME_STORAGE_KEY = "barebones-markdown-viewer-theme";
 const HIDE_CLUTTER_STORAGE_KEY = "barebones-markdown-viewer-hide-clutter";
+const ARROW_SCROLL_STEP = 48;
 const CLUTTER_FOLDERS = new Set([
   ".git",
   ".next",
@@ -34,6 +35,7 @@ function createState() {
     folderPath: null,
     isDirty: false,
     isSaving: false,
+    activeScrollRegion: "viewer",
     themeId: THEMES[0].id,
     viewMode: "rendered"
   };
@@ -151,6 +153,18 @@ export function createApp({
       updateDraftSource(elements.sourceView.value);
     });
 
+    for (const element of [elements.renderedView, elements.sourceView]) {
+      element?.addEventListener("pointerdown", () => {
+        state.activeScrollRegion = "viewer";
+      });
+    }
+
+    for (const element of [elements.sidebar, elements.fileTree, elements.ignoreClutterToggle]) {
+      element?.addEventListener("pointerdown", () => {
+        state.activeScrollRegion = "sidebar";
+      });
+    }
+
     elements.ignoreClutterToggle?.addEventListener("change", () => {
       void runAction(syncClutterVisibilityPreference);
     });
@@ -185,6 +199,11 @@ export function createApp({
       if ((event.ctrlKey || event.metaKey) && event.key === "\\") {
         event.preventDefault();
         toggleViewMode();
+        return;
+      }
+
+      if (handleArrowScrollKey(event)) {
+        return;
       }
     });
   }
@@ -483,6 +502,55 @@ export function createApp({
     elements.dirtyIndicator.hidden = !hasDocument || !state.isDirty;
   }
 
+  function handleArrowScrollKey(event) {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
+      return false;
+    }
+
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+      return false;
+    }
+
+    if (shouldPreserveNativeArrowBehavior(event.target)) {
+      return false;
+    }
+
+    const scrollElement = getActiveScrollElement();
+    if (!scrollElement) {
+      return false;
+    }
+
+    const delta = event.key === "ArrowDown" ? ARROW_SCROLL_STEP : -ARROW_SCROLL_STEP;
+    scrollElement.scrollTop = Math.max(0, (scrollElement.scrollTop ?? 0) + delta);
+    event.preventDefault();
+    return true;
+  }
+
+  function shouldPreserveNativeArrowBehavior(target) {
+    if (!target) {
+      return false;
+    }
+
+    if (target.isContentEditable || target.contentEditable === "true") {
+      return true;
+    }
+
+    const tagName = target.tagName?.toUpperCase?.();
+    return tagName === "INPUT" || tagName === "SELECT" || tagName === "TEXTAREA";
+  }
+
+  function getActiveScrollElement() {
+    if (!state.document) {
+      return null;
+    }
+
+    if (state.activeScrollRegion === "sidebar" && !elements.sidebar.hidden) {
+      return elements.sidebar;
+    }
+
+    return state.viewMode === "source" ? elements.sourceView : elements.renderedView;
+  }
+
   function loadTheme() {
     const themeId = storage?.getItem(THEME_STORAGE_KEY);
     applyTheme(themeId);
@@ -517,6 +585,7 @@ export function createApp({
     }
 
     state.viewMode = state.viewMode === "source" ? "rendered" : "source";
+    state.activeScrollRegion = "viewer";
     resetViewerScroll();
     applyShellState();
 

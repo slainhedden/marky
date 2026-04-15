@@ -3,13 +3,14 @@ import test from "node:test";
 
 import { createApp, readSingleDialogSelection } from "./viewer.js";
 
-function createElement() {
+function createElement(overrides = {}) {
   return {
     disabled: false,
     hidden: false,
     innerHTML: "",
     listeners: {},
     scrollTop: 99,
+    tagName: "DIV",
     textContent: "",
     value: "",
     addEventListener(type, handler) {
@@ -21,7 +22,8 @@ function createElement() {
     focus() {},
     querySelectorAll() {
       return [];
-    }
+    },
+    ...overrides
   };
 }
 
@@ -29,20 +31,20 @@ function createElements() {
   return {
     dirtyIndicator: { ...createElement(), hidden: true },
     documentShell: createElement(),
-    emptyOpenFileButton: createElement(),
-    emptyOpenFolderButton: createElement(),
+    emptyOpenFileButton: createElement({ tagName: "BUTTON" }),
+    emptyOpenFolderButton: createElement({ tagName: "BUTTON" }),
     emptyState: createElement(),
     errorBanner: { ...createElement(), hidden: true },
     fileTree: createElement(),
     ignoreClutterToggle: { ...createElement(), checked: true },
     renderedView: createElement(),
-    saveButton: createElement(),
+    saveButton: createElement({ tagName: "BUTTON" }),
     sidebar: createElement(),
-    sourceView: createElement(),
-    themeButton: createElement(),
-    toggleViewButton: createElement(),
-    toolbarOpenFileButton: createElement(),
-    toolbarOpenFolderButton: createElement()
+    sourceView: createElement({ tagName: "TEXTAREA" }),
+    themeButton: createElement({ tagName: "BUTTON" }),
+    toggleViewButton: createElement({ tagName: "BUTTON" }),
+    toolbarOpenFileButton: createElement({ tagName: "BUTTON" }),
+    toolbarOpenFolderButton: createElement({ tagName: "BUTTON" })
   };
 }
 
@@ -87,6 +89,27 @@ function createWindowObject() {
       return 1;
     }
   };
+}
+
+function dispatchKeydown(windowObject, overrides = {}) {
+  let prevented = false;
+
+  windowObject.listeners.keydown?.({
+    altKey: false,
+    ctrlKey: false,
+    defaultPrevented: false,
+    key: "",
+    metaKey: false,
+    preventDefault() {
+      prevented = true;
+      this.defaultPrevented = true;
+    },
+    shiftKey: false,
+    target: null,
+    ...overrides
+  });
+
+  return prevented;
 }
 
 function createAppWindow() {
@@ -548,4 +571,132 @@ test("close requests with unsaved changes are not prevented when discarded", asy
   });
 
   assert.equal(prevented, false);
+});
+
+test("arrow keys scroll the rendered view when it is active", async () => {
+  const elements = createElements();
+  const windowObject = createWindowObject();
+  const app = createApp({
+    appWindow: createAppWindow(),
+    documentObject: createDocumentObject(),
+    elements,
+    listen: async () => {},
+    showMessage: async () => {
+      throw new Error("showMessage should not be called");
+    },
+    storage: createStorage(),
+    windowObject,
+    invoke: async (command) => {
+      if (command === "get_launch_document") {
+        return null;
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  await app.boot();
+  app.showDocument({
+    fileName: "example.md",
+    html: "<h1>Example</h1>",
+    path: "C:/notes/example.md",
+    source: "# Example"
+  });
+
+  const prevented = dispatchKeydown(windowObject, {
+    key: "ArrowDown",
+    target: elements.toolbarOpenFileButton
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(elements.renderedView.scrollTop, 48);
+  assert.equal(elements.sourceView.scrollTop, 0);
+});
+
+test("arrow keys scroll the sidebar after it becomes active", async () => {
+  const elements = createElements();
+  const windowObject = createWindowObject();
+  const app = createApp({
+    appWindow: createAppWindow(),
+    documentObject: createDocumentObject(),
+    elements,
+    listen: async () => {},
+    showMessage: async () => {
+      throw new Error("showMessage should not be called");
+    },
+    storage: createStorage(),
+    windowObject,
+    invoke: async (command) => {
+      if (command === "get_launch_document") {
+        return null;
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  await app.boot();
+  app.showFolder({
+    document: {
+      fileName: "README.md",
+      html: "<h1>Readme</h1>",
+      path: "C:/notes/README.md",
+      source: "# Readme"
+    },
+    files: [{ name: "README.md", path: "C:/notes/README.md", relativePath: "README.md" }],
+    includeClutter: false,
+    folderPath: "C:/notes"
+  });
+
+  elements.sidebar.listeners.pointerdown?.({ target: elements.sidebar });
+
+  const prevented = dispatchKeydown(windowObject, {
+    key: "ArrowDown",
+    target: elements.toggleViewButton
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(elements.sidebar.scrollTop, 147);
+  assert.equal(elements.renderedView.scrollTop, 0);
+});
+
+test("arrow keys preserve native textarea behavior while editing source", async () => {
+  const elements = createElements();
+  const windowObject = createWindowObject();
+  const app = createApp({
+    appWindow: createAppWindow(),
+    documentObject: createDocumentObject(),
+    elements,
+    listen: async () => {},
+    showMessage: async () => {
+      throw new Error("showMessage should not be called");
+    },
+    storage: createStorage(),
+    windowObject,
+    invoke: async (command) => {
+      if (command === "get_launch_document") {
+        return null;
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  await app.boot();
+  app.showDocument({
+    fileName: "example.md",
+    html: "<h1>Example</h1>",
+    path: "C:/notes/example.md",
+    source: "# Example"
+  });
+
+  elements.toggleViewButton.click();
+
+  const prevented = dispatchKeydown(windowObject, {
+    key: "ArrowDown",
+    target: elements.sourceView
+  });
+
+  assert.equal(prevented, false);
+  assert.equal(elements.sourceView.scrollTop, 0);
 });
