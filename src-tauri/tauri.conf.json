@@ -29,6 +29,10 @@
     "category": "Utility",
     "publisher": "mrsam",
     "shortDescription": "A tiny Windows-first markdown viewer.",
+    "macOS": {
+      "bundleName": "Marky",
+      "infoPlist": "Info.plist"
+    },
     "fileAssociations": [
       {
         "ext": [
