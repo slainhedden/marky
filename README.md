@@ -142,3 +142,6 @@ The installer is configured to register markdown file associations for:
 ## Feedback and Contributing
 
 Open an issue if you hit a bug or want a focused feature. If you want to contribute, keep changes aligned with the project’s core constraint: a very small, skimmable markdown viewer with minimal dependencies.
+
+## Disclaimer
+I built this using mainly codex gpt 5.4-xhigh. I have what I think are good gaurdrails, skills, and an AGENTS.md. However, if you find bugs, sorry. 
