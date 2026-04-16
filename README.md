@@ -54,8 +54,19 @@ Marky also supports:
 
 There is not a package-manager install flow yet. For now, use a built desktop artifact:
 
+1. Open the [Releases page](https://github.com/slainhedden/marky/releases).
+2. Open the latest release.
+3. Expand `Assets`.
+4. Download the file for your platform:
+
+- Windows: `Marky_*_x64-setup.exe`
+- macOS Apple Silicon: `Marky_*_aarch64.dmg`
+- macOS Intel: `Marky_*_x64.dmg`
+
+After download:
+
 - Windows: run the NSIS installer
-- macOS: open the generated `.dmg` and move `Marky.app` into `Applications`
+- macOS: open the `.dmg` and move `Marky.app` into `Applications`
 
 Supported targets:
 
